@@ -37,14 +37,39 @@ class FaltaConfiguracion(Exception):
 
 
 def _requerida(nombre: str) -> str:
-    """Devuelve la variable de entorno `nombre` o explota con un mensaje util."""
+    """
+    Devuelve la variable de entorno `nombre` o explota con un mensaje util.
+
+    Distingue dos casos que parecen el mismo pero se arreglan distinto:
+
+    - No esta definida: nadie la puso. En local falta en el .env; en GitHub
+      Actions falta en el bloque `env:` del workflow.
+    - Definida pero vacia: esto en Actions significa casi siempre que el
+      secret no existe. `${{ secrets.LO_QUE_SEA }}` no falla cuando el secret
+      no esta: se expande a string vacio, y el job arranca igual.
+    """
     valor = os.environ.get(nombre)
-    if not valor:
+
+    if valor is None:
         raise FaltaConfiguracion(
-            f"Falta la variable de entorno {nombre}. "
-            f"Miralo en .env.example y agregala al .env (o a los Secrets del repo)."
+            f"{nombre} no esta definida. En local: agregala al .env "
+            f"(ver .env.example). En GitHub Actions: falta en el bloque `env:` "
+            f"del paso que corre este job."
         )
-    return valor
+
+    if not valor.strip():
+        raise FaltaConfiguracion(
+            f"{nombre} llego vacia. En GitHub Actions esto pasa cuando el "
+            f"secret no existe con ese nombre exacto. Revisá: que este en "
+            f"Settings > Secrets and variables > *Actions* (no en Dependabot "
+            f"ni Codespaces), que sea un Secret y no un Variable, que este en "
+            f"este repositorio y no en otro, y que no sea un secret de "
+            f"Environment (esos necesitan `environment:` en el job)."
+        )
+
+    # Un secret pegado desde el navegador se lleva a veces un salto de linea
+    # al final; sin este strip, un token valido falla por un caracter invisible.
+    return valor.strip()
 
 
 def _opcional(nombre: str, por_defecto: str = "") -> str:

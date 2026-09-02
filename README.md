@@ -106,12 +106,20 @@ contraseña de verdad.
 
 ### 2. El bot de Telegram
 
-Hablarle a [@BotFather](https://t.me/BotFather), `/newbot`, y guardar el token.
-Despues mandarle un mensaje cualquiera al bot nuevo y buscar el `chat.id` en:
+Hablarle a [@BotFather](https://t.me/BotFather), `/newbot`, y guardar el token
+en el `.env`. Despues, para averiguar el chat id:
 
+```bash
+.venv/bin/python -m tracker.jobs.chat_id
 ```
-https://api.telegram.org/bot<TOKEN>/getUpdates
-```
+
+El comando queda esperando: abris Telegram, le mandas cualquier mensaje al bot
+y te imprime el id para pegar en el `.env`.
+
+El chat id no esta en ningun panel y no se puede consultar: aparece recien
+cuando hay un mensaje, porque viene adentro del mensaje. Por eso
+`https://api.telegram.org/bot<TOKEN>/getUpdates` devuelve `result: []` si
+todavia no le escribiste al bot.
 
 ### 3. Local
 

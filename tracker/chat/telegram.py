@@ -37,6 +37,17 @@ def _pedir(metodo: str, **params) -> dict:
     return datos["result"]
 
 
+def obtener_yo() -> dict:
+    """
+    Datos del propio bot (metodo getMe).
+
+    Sirve para confirmar que el token es correcto y, sobre todo, para saber el
+    @usuario del bot: si le estas escribiendo al bot equivocado, getUpdates te
+    va a devolver vacio para siempre.
+    """
+    return _pedir("getMe")
+
+
 def obtener_updates(offset: int | None = None, limite: int = 100) -> list[dict]:
     """
     Trae los mensajes nuevos.

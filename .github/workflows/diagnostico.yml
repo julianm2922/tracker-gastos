@@ -1,0 +1,47 @@
+name: Diagnostico de secrets
+
+# Se dispara a mano (Actions > Diagnostico de secrets > Run workflow) y dice
+# cuales de los secrets llegan al job y cuales no.
+#
+# Existe porque el sintoma de un secret mal cargado es confuso: si el secret no
+# existe, `${{ secrets.X }}` no falla, se expande a string vacio y el job
+# arranca igual, para reventar despues en otro lado.
+#
+# No muestra ningun valor, solo si esta y cuantos caracteres tiene.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ver que secrets llegan
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MERCADOPAGO_ACCESS_TOKEN: ${{ secrets.MERCADOPAGO_ACCESS_TOKEN }}
+        run: |
+          faltan=0
+          for nombre in ANTHROPIC_API_KEY TELEGRAM_BOT_TOKEN \
+                        TELEGRAM_ALLOWED_CHAT_ID DATABASE_URL \
+                        MERCADOPAGO_ACCESS_TOKEN; do
+            valor="${!nombre}"
+            if [ -z "$valor" ]; then
+              echo "FALTA   $nombre"
+              faltan=$((faltan + 1))
+            else
+              echo "ok      $nombre (${#valor} caracteres)"
+            fi
+          done
+
+          echo
+          if [ "$faltan" -gt 0 ]; then
+            echo "Hay $faltan secret(s) que no llegan al job."
+            echo "Tienen que estar en Settings > Secrets and variables >"
+            echo "Actions > Repository secrets, de ESTE repositorio."
+            exit 1
+          fi
+          echo "Todos los secrets llegan bien."

@@ -1,0 +1,46 @@
+name: Sincronizar Mercado Pago
+
+# Este es el flujo B: importa los movimientos de MP y acredita los plazos
+# fijos vencidos.
+#
+# Corre una vez por dia porque el reporte de MP tarda en generarse y no hay
+# ningun apuro: los movimientos no se van a ningun lado.
+
+on:
+  schedule:
+    # 09:00 UTC = 06:00 en Argentina.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-mercadopago
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    # Mas largo que el otro job porque hay que esperar a que MP genere el
+    # reporte, y eso puede tardar varios minutos.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      # Este job no transcribe audio, asi que no instala faster-whisper.
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Importar movimientos y acreditar vencimientos
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MERCADOPAGO_ACCESS_TOKEN: ${{ secrets.MERCADOPAGO_ACCESS_TOKEN }}
+        run: python -m tracker.jobs.sync_mercadopago

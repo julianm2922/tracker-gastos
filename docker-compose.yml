@@ -1,0 +1,37 @@
+# Postgres local, SOLO para correr los tests de integracion.
+#
+# El proyecto no se despliega con Docker: los dos jobs corren en GitHub
+# Actions, que ya da un entorno limpio en cada corrida. Esto es una comodidad
+# de desarrollo y nada mas.
+#
+#   docker compose up -d --wait
+#   TEST_DATABASE_URL=postgresql://tracker:tracker@localhost:5433/tracker_test \
+#       .venv/bin/python -m pytest
+#   docker compose down -v
+#
+# Los tests borran todas las tablas antes de cada uno, por eso tiene que ser
+# una base descartable como esta y nunca la de verdad.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tracker-postgres-test
+    environment:
+      POSTGRES_USER: tracker
+      POSTGRES_PASSWORD: tracker
+      POSTGRES_DB: tracker_test
+    ports:
+      # 5433 y no 5432 para no chocar con un Postgres que ya tengas instalado.
+      - "5433:5432"
+    # Sin volumen a proposito: al hacer `down` se va todo, que es lo que
+    # queremos de una base de tests.
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      # Con esto `up --wait` espera a que la base acepte conexiones, en vez de
+      # devolver el control cuando el contenedor arranco pero Postgres todavia
+      # no esta listo.
+      test: ["CMD-SHELL", "pg_isready -U tracker -d tracker_test"]
+      interval: 2s
+      timeout: 3s
+      retries: 15

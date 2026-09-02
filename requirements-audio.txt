@@ -1,0 +1,6 @@
+-r requirements.txt
+
+# Transcripcion de audios, solo la necesita el job de Telegram.
+# Es pesado (arrastra CTranslate2), por eso vive aparte del requirements base:
+# el job de Mercado Pago no lo instala.
+faster-whisper>=1.1

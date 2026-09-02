@@ -1,0 +1,4 @@
+-r requirements.txt
+
+# Solo para correr los tests.
+pytest>=8.0

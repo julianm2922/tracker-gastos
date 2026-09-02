@@ -1,0 +1,11 @@
+# Cliente oficial de la API de Claude
+anthropic>=0.69
+
+# Driver de PostgreSQL. El extra [binary] evita tener que compilar nada.
+psycopg[binary]>=3.2
+
+# Para hablar con las APIs HTTP de Telegram y Mercado Pago
+requests>=2.32
+
+# Para leer el archivo .env cuando corremos en local
+python-dotenv>=1.0

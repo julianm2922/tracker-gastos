@@ -1,0 +1,55 @@
+name: Sincronizar Telegram
+
+# Este es el flujo A: lee los mensajes nuevos del bot y los registra.
+#
+# No hay ningun servidor prendido. Telegram guarda los mensajes de su lado
+# hasta 24hs, asi que pasar cada 20 minutos a buscarlos no pierde nada.
+
+on:
+  schedule:
+    # Cada 20 minutos. Ojo: el cron de GitHub va en UTC y no es puntual,
+    # puede correr con algunos minutos de atraso. Para esto da igual.
+    - cron: "*/20 * * * *"
+  # Para poder dispararlo a mano desde la pestaña Actions.
+  workflow_dispatch:
+
+# Que no se pisen dos corridas: si una todavia esta procesando mensajes, la
+# siguiente espera. Sin esto se podrian duplicar operaciones.
+concurrency:
+  group: sync-telegram
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements-audio.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements-audio.txt
+
+      # El modelo de whisper pesa varios cientos de MB. Sin este cache se
+      # bajaria en cada corrida, o sea 72 veces por dia.
+      - name: Cachear el modelo de whisper
+        uses: actions/cache@v4
+        with:
+          path: modelos_whisper
+          key: whisper-${{ vars.WHISPER_MODEL || 'small' }}
+
+      - name: Leer Telegram y registrar
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          WHISPER_MODEL: ${{ vars.WHISPER_MODEL || 'small' }}
+          WHISPER_CACHE_DIR: modelos_whisper
+        run: python -m tracker.jobs.sync_telegram

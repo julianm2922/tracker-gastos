@@ -42,3 +42,8 @@ def obtener_offset_telegram(conn: psycopg.Connection) -> int | None:
 def guardar_offset_telegram(conn: psycopg.Connection, offset: int) -> None:
     """Guarda desde donde tiene que seguir leyendo la proxima corrida."""
     guardar(conn, CLAVE_OFFSET_TELEGRAM, str(offset))
+
+
+def borrar(conn: psycopg.Connection, clave: str) -> None:
+    """Elimina un valor guardado. No hace nada si no existia."""
+    conn.execute("DELETE FROM estado_app WHERE clave = %s", (clave,))

@@ -15,7 +15,6 @@ para mirar es COLUMNAS_* aca abajo.
 
 import csv
 import io
-import time
 from datetime import date, datetime
 from decimal import InvalidOperation
 
@@ -31,14 +30,17 @@ RECURSO = "/v1/account/settlement_report"
 
 TIMEOUT = 60
 
-# Nombres posibles de cada columna en el CSV, en orden de preferencia.
-COLUMNAS_ID = ("SOURCE_ID", "TRANSACTION_ID", "OPERATION_ID", "EXTERNAL_REFERENCE")
-COLUMNAS_MONTO = ("TRANSACTION_NET_AMOUNT", "NET_CREDIT_AMOUNT", "TRANSACTION_AMOUNT", "AMOUNT")
-COLUMNAS_FECHA = ("TRANSACTION_DATE", "DATE_CREATED", "MONEY_RELEASE_DATE", "SETTLEMENT_DATE")
-COLUMNAS_DESCRIPCION = (
-    "DESCRIPTION", "PAYER_NAME", "COLLECTOR_NAME", "TRANSACTION_TYPE",
-    "PAYMENT_METHOD_TYPE", "REASON",
-)
+# Nombres posibles de cada columna en el CSV, en orden de preferencia. Son los
+# nombres reales del reporte "todas las transacciones" segun la documentacion
+# de Mercado Pago (developers > Reports > Account money > Campos del reporte).
+COLUMNAS_ID = ("SOURCE_ID", "EXTERNAL_REFERENCE")
+# SETTLEMENT_NET_AMOUNT es el monto neto que impacto el balance de la cuenta
+# (ya con comisiones descontadas): es el numero que corresponde a un asiento
+# nuestro. TRANSACTION_AMOUNT es el monto bruto, y queda como respaldo por si
+# algun reporte no trae la columna neta.
+COLUMNAS_MONTO = ("SETTLEMENT_NET_AMOUNT", "REAL_AMOUNT", "TRANSACTION_AMOUNT")
+COLUMNAS_FECHA = ("TRANSACTION_DATE", "SETTLEMENT_DATE", "MONEY_RELEASE_DATE")
+COLUMNAS_DESCRIPCION = ("DESCRIPTION", "PAYER_NAME", "TRANSACTION_TYPE", "PAYMENT_METHOD_TYPE")
 
 
 class ErrorDeMercadoPago(Exception):
@@ -49,12 +51,14 @@ def _headers() -> dict:
     return {"Authorization": f"Bearer {config.mercadopago_access_token()}"}
 
 
-def pedir_reporte(desde: date, hasta: date) -> None:
+def pedir_reporte(desde: date, hasta: date) -> dict:
     """
     Le pide a MP que genere el reporte de un rango de fechas.
 
-    No devuelve el reporte: lo encola. Tarda desde unos segundos hasta unos
-    minutos, y despues aparece en listar_reportes().
+    No devuelve el reporte: encola una "tarea" de generacion y devuelve su
+    descripcion, algo como {"id": 2222, "status": "pending", ...}. Tarda desde
+    unos segundos hasta varios minutos en terminar. Guardar el "id" es lo que
+    permite consultar despues si ya esta lista, con `consultar_tarea`.
     """
     respuesta = requests.post(
         f"{BASE}{RECURSO}",
@@ -69,6 +73,27 @@ def pedir_reporte(desde: date, hasta: date) -> None:
         raise ErrorDeMercadoPago(
             f"No pude pedir el reporte ({respuesta.status_code}): {respuesta.text[:300]}"
         )
+    return respuesta.json()
+
+
+def consultar_tarea(tarea_id) -> dict:
+    """
+    Consulta si una tarea de generacion de reporte (la que devolvio
+    pedir_reporte) ya termino.
+
+    Cuando el campo "status" del resultado es "processed", el campo
+    "file_name" tiene el nombre del reporte listo para bajar con
+    descargar_reporte(). Cualquier otro status quiere decir "todavia no".
+    """
+    respuesta = requests.get(
+        f"{BASE}{RECURSO}/task/{tarea_id}", headers=_headers(), timeout=TIMEOUT
+    )
+    if respuesta.status_code >= 400:
+        raise ErrorDeMercadoPago(
+            f"No pude consultar la tarea {tarea_id} "
+            f"({respuesta.status_code}): {respuesta.text[:300]}"
+        )
+    return respuesta.json()
 
 
 def listar_reportes() -> list[dict]:
@@ -170,24 +195,3 @@ def normalizar_csv(texto_csv: str) -> list[dict]:
     return movimientos
 
 
-def obtener_movimientos(
-    desde: date, hasta: date, *, intentos: int = 10, espera: int = 20
-) -> list[dict]:
-    """
-    Los tres pasos juntos: pedir el reporte, esperar a que este, bajarlo.
-
-    Si al cabo de `intentos` el reporte todavia no aparecio, devolvemos lista
-    vacia sin romper: el cron vuelve a correr mañana y lo agarra. Perder una
-    corrida no es grave porque el dedupe por origen_ref evita duplicados.
-    """
-    conocidos = {r.get("file_name") for r in listar_reportes()}
-    pedir_reporte(desde, hasta)
-
-    for _ in range(intentos):
-        time.sleep(espera)
-        for reporte in listar_reportes():
-            nombre = reporte.get("file_name")
-            if nombre and nombre not in conocidos:
-                return normalizar_csv(descargar_reporte(nombre))
-
-    return []

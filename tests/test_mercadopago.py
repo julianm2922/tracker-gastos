@@ -34,14 +34,17 @@ def test_parsea_un_reporte_tipico():
 
 def test_el_origen_ref_lleva_prefijo_para_no_chocar_con_otras_fuentes():
     movimientos = normalizar_csv(
-        "SOURCE_ID,AMOUNT,DATE_CREATED\n99,-100,2026-09-01\n"
+        "SOURCE_ID,TRANSACTION_AMOUNT,TRANSACTION_DATE\n99,-100,2026-09-01\n"
     )
     assert movimientos[0]["origen_ref"] == "mp-99"
 
 
 def test_acepta_nombres_de_columna_alternativos():
+    # EXTERNAL_REFERENCE, MONEY_RELEASE_DATE y PAYER_NAME son nombres de
+    # columna reales, distintos de los "preferidos" (SOURCE_ID, etc): el
+    # reporte no siempre trae exactamente las mismas.
     reporte = (
-        "OPERATION_ID,TRANSACTION_NET_AMOUNT,MONEY_RELEASE_DATE,PAYER_NAME\n"
+        "EXTERNAL_REFERENCE,TRANSACTION_AMOUNT,MONEY_RELEASE_DATE,PAYER_NAME\n"
         "555,-999.99,01/09/2026,Farmacity\n"
     )
 
@@ -51,6 +54,20 @@ def test_acepta_nombres_de_columna_alternativos():
     assert movimientos[0]["monto"] == Decimal("-999.99")
     assert movimientos[0]["fecha"] == date(2026, 9, 1)
     assert movimientos[0]["descripcion"] == "Farmacity"
+
+
+def test_el_monto_neto_tiene_prioridad_sobre_el_bruto():
+    # SETTLEMENT_NET_AMOUNT es lo que realmente impacto el saldo de la cuenta
+    # (ya con comisiones descontadas). TRANSACTION_AMOUNT es el monto bruto:
+    # si estan las dos columnas, tiene que usarse la neta.
+    reporte = (
+        "SOURCE_ID,TRANSACTION_AMOUNT,SETTLEMENT_NET_AMOUNT,TRANSACTION_DATE\n"
+        "1,-1000.00,-950.00,2026-09-01\n"
+    )
+
+    movimientos = normalizar_csv(reporte)
+
+    assert movimientos[0]["monto"] == Decimal("-950.00")
 
 
 def test_descarta_filas_incompletas_sin_romper():

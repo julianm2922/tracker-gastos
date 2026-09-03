@@ -121,3 +121,124 @@ def test_un_id_de_reserva_inventado_no_llega_a_la_base(conn, sueldo):
 
     assert resultado.registrados == 1
     assert resultado.preguntas == []
+
+
+# ---------------------------------------------------------------------------
+# La logica de la tarea de reporte (tracker/jobs/sync_mercadopago.py)
+#
+# MP no entrega el reporte al toque: hay que pedirlo, y despues consultar si
+# ya termino. Como el job corre una vez por dia, el id de esa tarea se guarda
+# en estado_app para retomarla en la proxima corrida en vez de perderla o
+# pedir una nueva de mas.
+# ---------------------------------------------------------------------------
+
+from datetime import timedelta
+from unittest.mock import patch
+
+from tracker import fechas
+from tracker.jobs import sync_mercadopago as job
+from tracker.store import estado
+
+
+class MPFalso:
+    """Reemplaza a tracker.movements.mercadopago para los tests del job."""
+
+    def __init__(self):
+        self.pedidos = []
+        self.consultas = []
+        self.tarea_a_devolver = {"id": 111, "status": "pending"}
+        self.csv_a_devolver = "SOURCE_ID,TRANSACTION_AMOUNT,TRANSACTION_DATE\n"
+
+    def pedir_reporte(self, desde, hasta):
+        self.pedidos.append((desde, hasta))
+        return dict(self.tarea_a_devolver)
+
+    def consultar_tarea(self, tarea_id):
+        self.consultas.append(tarea_id)
+        return dict(self.tarea_a_devolver)
+
+    def descargar_reporte(self, nombre):
+        return self.csv_a_devolver
+
+    def normalizar_csv(self, texto):
+        from tracker.movements.mercadopago import normalizar_csv
+        return normalizar_csv(texto)
+
+
+def test_si_no_hay_tarea_pendiente_pide_una_y_la_guarda(conn):
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 42, "status": "pending"}
+
+    with patch.object(job, "mercadopago", mp):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert len(mp.pedidos) == 1
+    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "42"
+    assert estado.obtener(conn, job.CLAVE_TAREA_FECHA) == fechas.hoy().isoformat()
+
+
+def test_si_la_tarea_no_termino_no_pide_una_nueva(conn):
+    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
+    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 42, "status": "pending"}
+
+    with patch.object(job, "mercadopago", mp):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert mp.pedidos == []  # no pidio una nueva
+    assert mp.consultas == ["42"]
+    # sigue guardada para la proxima corrida
+    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "42"
+
+
+def test_cuando_la_tarea_termina_se_procesa_y_se_libera(conn, sueldo):
+    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
+    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 42, "status": "processed", "file_name": "r.csv"}
+    mp.csv_a_devolver = (
+        "SOURCE_ID,TRANSACTION_AMOUNT,TRANSACTION_DATE\n"
+        "1,150000,2026-09-01\n"
+    )
+
+    with patch.object(job, "mercadopago", mp):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert asientos.saldo(conn, sueldo["id"]) == Decimal("150000.00")
+    # se libera: la proxima corrida puede pedir un reporte nuevo
+    assert estado.obtener(conn, job.CLAVE_TAREA_ID) is None
+
+
+def test_una_tarea_vieja_se_abandona_y_se_pide_otra(conn):
+    vieja = fechas.hoy() - timedelta(days=job.MAX_DIAS_ESPERANDO_TAREA + 1)
+    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
+    estado.guardar(conn, job.CLAVE_TAREA_FECHA, vieja.isoformat())
+
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 99, "status": "pending"}
+
+    with patch.object(job, "mercadopago", mp):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert len(mp.pedidos) == 1         # abandono la 42 y pidio una nueva
+    assert "42" not in mp.consultas     # nunca pregunto por la abandonada
+    assert mp.consultas == [99]         # solo consulto la nueva, recien pedida
+    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "99"
+
+
+def test_una_tarea_reciente_no_se_abandona(conn):
+    reciente = fechas.hoy() - timedelta(days=1)
+    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
+    estado.guardar(conn, job.CLAVE_TAREA_FECHA, reciente.isoformat())
+
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 42, "status": "pending"}
+
+    with patch.object(job, "mercadopago", mp):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert mp.pedidos == []
+    assert mp.consultas == ["42"]

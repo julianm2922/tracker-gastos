@@ -214,6 +214,21 @@ que `movements/mercadopago.py` busca cada dato entre varios nombres posibles y
 descarta las filas que no entiende. Si algun movimiento no aparece, mirar las
 constantes `COLUMNAS_*` de ese modulo contra el CSV real.
 
+**Pedir el reporte no lo devuelve al toque.** El endpoint de MP
+(`POST /v1/account/settlement_report`) encola una tarea de generacion que
+tarda desde segundos hasta varios minutos, y devuelve un `id` para consultar
+si ya termino (`GET .../task/{id}`). Como este job corre una vez por dia,
+`jobs/sync_mercadopago.py` guarda ese id en `estado_app` en vez de quedarse
+esperando: si la tarea no termino, la proxima corrida retoma la misma (sin
+pedir una nueva de mas) y recien cuando esta lista se procesa el reporte. Si
+una tarea queda mas de `MAX_DIAS_ESPERANDO_TAREA` dias sin terminar, se
+abandona y se pide una nueva.
+
+Para probar el endpoint a mano (por ejemplo en Postman): tiene que ser un
+**POST** con el body `{"begin_date": "...", "end_date": "..."}` — un GET a esa
+misma URL devuelve 404, porque ese metodo no existe en esa ruta (el GET vive
+en `.../settlement_report/list` y en `.../settlement_report/task/{id}`).
+
 ## Costos
 
 | Que | Cuanto |

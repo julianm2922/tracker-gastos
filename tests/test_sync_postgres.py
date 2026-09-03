@@ -169,7 +169,9 @@ def test_si_no_hay_tarea_pendiente_pide_una_y_la_guarda(conn):
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
-    with patch.object(job, "mercadopago", mp):
+    # status "pending" para siempre: sin este patch, el job se quedaria
+    # esperando de verdad hasta MAX_ESPERA_SEGUNDOS (12 minutos por defecto).
+    with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
         job.importar_movimientos(conn, chat_id=1)
 
     assert len(mp.pedidos) == 1
@@ -184,7 +186,7 @@ def test_si_la_tarea_no_termino_no_pide_una_nueva(conn):
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
-    with patch.object(job, "mercadopago", mp):
+    with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
         job.importar_movimientos(conn, chat_id=1)
 
     assert mp.pedidos == []  # no pidio una nueva
@@ -220,7 +222,7 @@ def test_una_tarea_vieja_se_abandona_y_se_pide_otra(conn):
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 99, "status": "pending"}
 
-    with patch.object(job, "mercadopago", mp):
+    with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
         job.importar_movimientos(conn, chat_id=1)
 
     assert len(mp.pedidos) == 1         # abandono la 42 y pidio una nueva
@@ -237,8 +239,35 @@ def test_una_tarea_reciente_no_se_abandona(conn):
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
-    with patch.object(job, "mercadopago", mp):
+    with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
         job.importar_movimientos(conn, chat_id=1)
 
     assert mp.pedidos == []
     assert mp.consultas == ["42"]
+
+
+def test_espera_activamente_a_que_la_tarea_termine(conn, sueldo):
+    # La tarea esta "pending" las primeras dos veces que se consulta, y recien
+    # a la tercera aparece "processed". El job tiene que quedarse esperando
+    # (sin darse por vencido en el primer "pending") y terminar procesando.
+    respuestas = iter([
+        {"id": 42, "status": "pending"},
+        {"id": 42, "status": "pending"},
+        {"id": 42, "status": "processed", "file_name": "r.csv"},
+    ])
+    mp = MPFalso()
+    mp.consultar_tarea = lambda tarea_id: next(respuestas)
+    mp.csv_a_devolver = (
+        "SOURCE_ID,TRANSACTION_AMOUNT,TRANSACTION_DATE\n1,150000,2026-09-01\n"
+    )
+
+    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
+    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+
+    # No dormimos de verdad entre reintentos: el test prueba la logica de la
+    # espera, no cuanto tarda time.sleep.
+    with patch.object(job, "mercadopago", mp), patch("time.sleep"):
+        job.importar_movimientos(conn, chat_id=1)
+
+    assert asientos.saldo(conn, sueldo["id"]) == Decimal("150000.00")
+    assert estado.obtener(conn, job.CLAVE_TAREA_ID) is None

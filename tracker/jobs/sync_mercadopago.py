@@ -14,25 +14,31 @@ Hace dos cosas, en este orden:
    una reserva).
 
 Sobre el punto 2, un detalle que vale la pena explicar porque no es obvio:
-pedir el reporte a MP no lo devuelve al toque, encola una "tarea" que tarda
-desde segundos hasta varios minutos en terminar. Como este job corre una vez
-por dia, en vez de quedarse esperando a que la tarea termine (bloqueando la
-corrida, y arriesgando perderla si tarda mas de lo que esperamos), el id de la
-tarea se guarda en estado_app:
+pedir el reporte a MP no lo devuelve al toque, encola una "tarea" que segun la
+documentacion tarda "desde segundos hasta varios minutos" en terminar. En la
+practica se observo una tardando casi 2 horas, asi que esa promesa no es muy
+confiable. Este job espera un poco (hasta MAX_ESPERA_SEGUNDOS, corto a
+proposito) por si la tarea termina rapido, pero el mecanismo que de verdad
+sostiene esto es otro:
 
-- Si no hay ninguna tarea pendiente, se pide un reporte nuevo y se guarda su id.
-- Si hay una pendiente de la corrida anterior, se consulta si ya termino. Si
-  todavia no, no se pide una nueva (para no acumular pedidos) y se reintenta
-  mañana.
-- Si una tarea lleva mas de MAX_DIAS_ESPERANDO_TAREA dias sin terminar, se la
-  abandona y se pide una nueva: algo raro paso y insistirle a MP con la misma
-  tarea para siempre no tiene sentido.
+- Si no hay ninguna tarea pendiente, se pide un reporte nuevo.
+- Se espera un rato corto a que esa tarea (la nueva, o una pendiente de una
+  corrida anterior) termine. Si termina, se procesa en la misma corrida.
+- Si no termina en ese rato, no se pierde nada: el id de la tarea queda
+  guardado en estado_app y la corrida de mañana la retoma justo donde quedo,
+  sin pedir una tarea nueva de mas. Esto, y no la espera corta, es lo que
+  realmente garantiza que el reporte se termine procesando tarde o temprano.
+- Si una tarea lleva mas de MAX_DIAS_ESPERANDO_TAREA dias sin terminar
+  (esperando entre corridas, no en una sola espera), se la abandona y se pide
+  una nueva: algo raro paso y insistirle a MP con la misma tarea para siempre
+  no tiene sentido.
 
 Se piden DIAS_HACIA_ATRAS dias de movimientos, no solo el ultimo: si una
 corrida falla o el reporte se demora, la siguiente igual cubre lo que falto.
 Los repetidos no molestan porque el dedupe por origen_ref los filtra.
 """
 
+import time
 import traceback
 from datetime import timedelta
 
@@ -46,6 +52,19 @@ DIAS_HACIA_ATRAS = 7
 CLAVE_TAREA_ID = "mp_reporte_tarea_id"
 CLAVE_TAREA_FECHA = "mp_reporte_tarea_fecha"
 MAX_DIAS_ESPERANDO_TAREA = 3
+
+# Cuanto esperamos, como maximo, a que la tarea de MP termine EN ESTA CORRIDA.
+#
+# En la practica, un reporte de varios dias puede tardar bastante mas que "unos
+# minutos" (la documentacion de MP promete eso, pero se observo una tarea real
+# tardando casi 2 horas en terminar). Por eso esta espera es corta a proposito:
+# no tiene sentido quemar minutos del runner en una espera que casi nunca va a
+# alcanzar. El mecanismo que de verdad resuelve esto es que el id de la tarea
+# queda guardado y la corrida de mañana la retoma sola (ver el docstring del
+# modulo); esta espera solo esta para el caso ocasional en que el reporte
+# termina rapido y se puede procesar en el momento.
+MAX_ESPERA_SEGUNDOS = 3 * 60
+INTERVALO_CONSULTA_SEGUNDOS = 20
 
 
 def acreditar_vencidos(conn, chat_id: int) -> None:
@@ -97,6 +116,29 @@ def _limpiar_tarea(conn) -> None:
     estado.borrar(conn, CLAVE_TAREA_FECHA)
 
 
+def _esperar_tarea(tarea_id) -> dict:
+    """
+    Consulta el estado de la tarea cada INTERVALO_CONSULTA_SEGUNDOS, hasta que
+    termine o hasta MAX_ESPERA_SEGUNDOS, lo que pase primero.
+
+    No es una espera indefinida a proposito: si MP tarda mas que eso, es mejor
+    cortar y dejar que la corrida de mañana la retome (el id sigue guardado)
+    que arriesgarse a que el workflow entero se corte por timeout a mitad de
+    algo.
+    """
+    limite = time.monotonic() + MAX_ESPERA_SEGUNDOS
+    tarea = mercadopago.consultar_tarea(tarea_id)
+    intentos = 1
+
+    while tarea.get("status") != "processed" and time.monotonic() < limite:
+        time.sleep(INTERVALO_CONSULTA_SEGUNDOS)
+        tarea = mercadopago.consultar_tarea(tarea_id)
+        intentos += 1
+
+    print(f"Tarea {tarea_id}: status={tarea.get('status')} (consultada {intentos} vez/veces)")
+    return tarea
+
+
 def importar_movimientos(conn, chat_id: int) -> None:
     """
     Sigue el estado del reporte de MP y, cuando esta listo, procesa los
@@ -115,12 +157,14 @@ def importar_movimientos(conn, chat_id: int) -> None:
     else:
         print(f"Seguia pendiente la tarea {tarea_id} de una corrida anterior.")
 
-    tarea = mercadopago.consultar_tarea(tarea_id)
-    estado_tarea = tarea.get("status")
-    print(f"Estado de la tarea {tarea_id}: {estado_tarea}")
+    tarea = _esperar_tarea(tarea_id)
 
-    if estado_tarea != "processed":
-        print("Todavia no esta lista. Se revisa de nuevo en la proxima corrida.")
+    if tarea.get("status") != "processed":
+        print(
+            f"La tarea {tarea_id} no termino despues de esperar "
+            f"{MAX_ESPERA_SEGUNDOS}s (ultimo estado: {tarea.get('status')}). "
+            f"Se retoma en la proxima corrida."
+        )
         return
 
     nombre_archivo = tarea["file_name"]

@@ -214,15 +214,19 @@ que `movements/mercadopago.py` busca cada dato entre varios nombres posibles y
 descarta las filas que no entiende. Si algun movimiento no aparece, mirar las
 constantes `COLUMNAS_*` de ese modulo contra el CSV real.
 
-**Pedir el reporte no lo devuelve al toque.** El endpoint de MP
-(`POST /v1/account/settlement_report`) encola una tarea de generacion que
-tarda desde segundos hasta varios minutos, y devuelve un `id` para consultar
-si ya termino (`GET .../task/{id}`). Como este job corre una vez por dia,
-`jobs/sync_mercadopago.py` guarda ese id en `estado_app` en vez de quedarse
-esperando: si la tarea no termino, la proxima corrida retoma la misma (sin
-pedir una nueva de mas) y recien cuando esta lista se procesa el reporte. Si
-una tarea queda mas de `MAX_DIAS_ESPERANDO_TAREA` dias sin terminar, se
-abandona y se pide una nueva.
+**Pedir el reporte no lo devuelve al toque, y puede tardar mucho.** El
+endpoint de MP (`POST /v1/account/settlement_report`) encola una tarea de
+generacion y devuelve un `id` para consultar si ya termino
+(`GET .../task/{id}`). La documentacion de MP dice "desde segundos hasta
+varios minutos", pero en la practica se vio una tarea real tardando casi 2
+horas — no es confiable. Por eso `jobs/sync_mercadopago.py` espera solo un
+rato corto (`MAX_ESPERA_SEGUNDOS`, 3 minutos por defecto) por si termina
+rapido, y si no, el `id` de la tarea queda guardado en `estado_app` y la
+corrida de mañana la retoma justo donde quedo, sin pedir una tarea nueva de
+mas — es este mecanismo, y no la espera corta, el que garantiza que el reporte
+se termine procesando tarde o temprano. Si una tarea queda mas de
+`MAX_DIAS_ESPERANDO_TAREA` dias sin terminar (entre corridas, no en una sola
+espera), se la abandona y se pide otra.
 
 Para probar el endpoint a mano (por ejemplo en Postman): tiene que ser un
 **POST** con el body `{"begin_date": "...", "end_date": "..."}` — un GET a esa

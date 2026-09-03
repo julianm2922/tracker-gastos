@@ -19,8 +19,11 @@ concurrency:
 jobs:
   sincronizar:
     runs-on: ubuntu-latest
-    # Mas largo que el otro job porque hay que esperar a que MP genere el
-    # reporte, y eso puede tardar varios minutos.
+    # El reporte de MP puede tardar mucho mas de lo que promete su
+    # documentacion (se observo un caso real de casi 2 horas). El job no
+    # espera tanto: espera un rato corto (MAX_ESPERA_SEGUNDOS en
+    # sync_mercadopago.py) y si no alcanza, retoma en la corrida de mañana.
+    # Este timeout es generoso igual, por las dudas.
     timeout-minutes: 30
 
     steps:

@@ -1,10 +1,12 @@
-name: Sincronizar Mercado Pago
+name: Sincronizar Mercado Pago (diario)
 
-# Este es el flujo B: importa los movimientos de MP y acredita los plazos
-# fijos vencidos.
+# Este es el flujo B: importa los movimientos de MP (alcance "diario", una
+# ventana de pocos dias) y acredita los plazos fijos vencidos.
 #
 # Corre una vez por dia porque el reporte de MP tarda en generarse y no hay
-# ningun apuro: los movimientos no se van a ningun lado.
+# ningun apuro: los movimientos no se van a ningun lado. Hay otro workflow,
+# sync_mercadopago_mensual.yml, que hace una revision mas amplia (el mes
+# completo) con menos frecuencia, como respaldo de este.
 
 on:
   schedule:
@@ -12,6 +14,9 @@ on:
     - cron: "0 9 * * *"
   workflow_dispatch:
 
+# Comparte el grupo con el mensual: si alguna vez coinciden, que corran uno
+# despues del otro y no al mismo tiempo. En la practica casi no va a pasar
+# (el mensual corre una vez por semana), pero no cuesta nada evitarlo.
 concurrency:
   group: sync-mercadopago
   cancel-in-progress: false
@@ -39,11 +44,11 @@ jobs:
       - name: Instalar dependencias
         run: pip install -r requirements.txt
 
-      - name: Importar movimientos y acreditar vencimientos
+      - name: Importar movimientos (diario) y acreditar vencimientos
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           MERCADOPAGO_ACCESS_TOKEN: ${{ secrets.MERCADOPAGO_ACCESS_TOKEN }}
-        run: python -m tracker.jobs.sync_mercadopago
+        run: python -m tracker.jobs.sync_mercadopago diario

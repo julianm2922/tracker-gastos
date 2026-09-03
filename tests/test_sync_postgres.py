@@ -170,34 +170,34 @@ def test_si_no_hay_tarea_pendiente_pide_una_y_la_guarda(conn):
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
     # status "pending" para siempre: sin este patch, el job se quedaria
-    # esperando de verdad hasta MAX_ESPERA_SEGUNDOS (12 minutos por defecto).
+    # esperando de verdad hasta MAX_ESPERA_SEGUNDOS (3 minutos por defecto).
     with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert len(mp.pedidos) == 1
-    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "42"
-    assert estado.obtener(conn, job.CLAVE_TAREA_FECHA) == fechas.hoy().isoformat()
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) == "42"
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_fecha) == fechas.hoy().isoformat()
 
 
 def test_si_la_tarea_no_termino_no_pide_una_nueva(conn):
-    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
-    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, fechas.hoy().isoformat())
 
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
     with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert mp.pedidos == []  # no pidio una nueva
     assert mp.consultas == ["42"]
     # sigue guardada para la proxima corrida
-    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "42"
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) == "42"
 
 
 def test_cuando_la_tarea_termina_se_procesa_y_se_libera(conn, sueldo):
-    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
-    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, fechas.hoy().isoformat())
 
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "processed", "file_name": "r.csv"}
@@ -207,40 +207,40 @@ def test_cuando_la_tarea_termina_se_procesa_y_se_libera(conn, sueldo):
     )
 
     with patch.object(job, "mercadopago", mp):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert asientos.saldo(conn, sueldo["id"]) == Decimal("150000.00")
     # se libera: la proxima corrida puede pedir un reporte nuevo
-    assert estado.obtener(conn, job.CLAVE_TAREA_ID) is None
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) is None
 
 
 def test_una_tarea_vieja_se_abandona_y_se_pide_otra(conn):
     vieja = fechas.hoy() - timedelta(days=job.MAX_DIAS_ESPERANDO_TAREA + 1)
-    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
-    estado.guardar(conn, job.CLAVE_TAREA_FECHA, vieja.isoformat())
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, vieja.isoformat())
 
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 99, "status": "pending"}
 
     with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert len(mp.pedidos) == 1         # abandono la 42 y pidio una nueva
     assert "42" not in mp.consultas     # nunca pregunto por la abandonada
     assert mp.consultas == [99]         # solo consulto la nueva, recien pedida
-    assert estado.obtener(conn, job.CLAVE_TAREA_ID) == "99"
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) == "99"
 
 
 def test_una_tarea_reciente_no_se_abandona(conn):
     reciente = fechas.hoy() - timedelta(days=1)
-    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
-    estado.guardar(conn, job.CLAVE_TAREA_FECHA, reciente.isoformat())
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, reciente.isoformat())
 
     mp = MPFalso()
     mp.tarea_a_devolver = {"id": 42, "status": "pending"}
 
     with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert mp.pedidos == []
     assert mp.consultas == ["42"]
@@ -261,13 +261,55 @@ def test_espera_activamente_a_que_la_tarea_termine(conn, sueldo):
         "SOURCE_ID,TRANSACTION_AMOUNT,TRANSACTION_DATE\n1,150000,2026-09-01\n"
     )
 
-    estado.guardar(conn, job.CLAVE_TAREA_ID, "42")
-    estado.guardar(conn, job.CLAVE_TAREA_FECHA, fechas.hoy().isoformat())
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, fechas.hoy().isoformat())
 
     # No dormimos de verdad entre reintentos: el test prueba la logica de la
     # espera, no cuanto tarda time.sleep.
     with patch.object(job, "mercadopago", mp), patch("time.sleep"):
-        job.importar_movimientos(conn, chat_id=1)
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_DIARIO)
 
     assert asientos.saldo(conn, sueldo["id"]) == Decimal("150000.00")
-    assert estado.obtener(conn, job.CLAVE_TAREA_ID) is None
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) is None
+
+
+def test_diario_y_mensual_piden_rangos_distintos():
+    hoy = fechas.hoy()
+
+    desde_diario, hasta_diario = job.ALCANCE_DIARIO.rango()
+    desde_mensual, hasta_mensual = job.ALCANCE_MENSUAL.rango()
+
+    assert hasta_diario == hoy
+    assert hasta_mensual == hoy
+    assert desde_diario == hoy - timedelta(days=job.DIAS_VENTANA_DIARIA - 1)
+    assert desde_mensual == hoy.replace(day=1)
+    # El mensual cubre todo lo que cubre el diario y mas (salvo los primeros
+    # dias del mes, donde son iguales).
+    assert desde_mensual <= desde_diario
+
+
+def test_diario_y_mensual_no_se_pisan(conn):
+    # Si el diario tiene una tarea pendiente, el mensual no la ve ni la toca:
+    # usan claves distintas en estado_app.
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_id, "42")
+    estado.guardar(conn, job.ALCANCE_DIARIO.clave_tarea_fecha, fechas.hoy().isoformat())
+
+    mp = MPFalso()
+    mp.tarea_a_devolver = {"id": 99, "status": "pending"}
+
+    with patch.object(job, "mercadopago", mp), patch.object(job, "MAX_ESPERA_SEGUNDOS", 0):
+        job.importar_movimientos(conn, chat_id=1, alcance=job.ALCANCE_MENSUAL)
+
+    # El mensual pidio su propia tarea nueva, sin tocar la del diario.
+    assert len(mp.pedidos) == 1
+    assert estado.obtener(conn, job.ALCANCE_DIARIO.clave_tarea_id) == "42"
+    assert estado.obtener(conn, job.ALCANCE_MENSUAL.clave_tarea_id) == "99"
+
+
+def test_main_rechaza_un_alcance_desconocido(monkeypatch):
+    # No hace falta la fixture `conn`: el chequeo del alcance pasa ANTES de
+    # tocar la base o el token de Telegram, asi que este test no necesita
+    # Postgres ni credenciales.
+    monkeypatch.setattr("sys.argv", ["sync_mercadopago.py", "semanal"])
+    with pytest.raises(SystemExit):
+        job.main()

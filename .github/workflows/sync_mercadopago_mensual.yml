@@ -1,0 +1,52 @@
+name: Sincronizar Mercado Pago (mensual)
+
+# Revision de respaldo del flujo B: pide el reporte del mes actual completo
+# (alcance "mensual"), no solo la ventana chica del sync diario
+# (sync_mercadopago.yml). Sirve de red de seguridad para lo que ese se haya
+# perdido: una tarea abandonada por tardar demasiado, un movimiento que MP
+# ajusto despues de generado el reporte diario, etc.
+#
+# Una vez por semana alcanza: no hace falta mas seguido para algo que ya
+# esta cubierto, dia a dia, por el otro workflow.
+
+on:
+  schedule:
+    # Lunes 10:00 UTC = 07:00 en Argentina (una hora despues del diario, para
+    # no pedirle dos reportes a MP al mismo tiempo).
+    - cron: "0 10 * * 1"
+  workflow_dispatch:
+
+# Mismo grupo que el diario: ver el comentario en sync_mercadopago.yml.
+concurrency:
+  group: sync-mercadopago
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    # Mismo razonamiento que en el diario: el reporte de MP puede tardar
+    # mucho mas de lo que promete la documentacion, y para un rango de un mes
+    # entero es esperable que tarde igual o mas. El job no se queda esperando
+    # eso: espera un rato corto y, si no alcanza, retoma la semana que viene.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Instalar dependencias
+        run: pip install -r requirements.txt
+
+      - name: Importar movimientos (mensual) y acreditar vencimientos
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_ALLOWED_CHAT_ID: ${{ secrets.TELEGRAM_ALLOWED_CHAT_ID }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          MERCADOPAGO_ACCESS_TOKEN: ${{ secrets.MERCADOPAGO_ACCESS_TOKEN }}
+        run: python -m tracker.jobs.sync_mercadopago mensual
